@@ -33,6 +33,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h> // for execvp
+#include <getopt.h>
 
 namespace rng          = std::ranges;
 static const auto npos = std::string::npos;
@@ -1459,12 +1460,13 @@ UIConfig GDBF_Config::load_settings(bool earlyPass) {
             } else {
                ctx._main_window->register_shortcut(std::move(shortcut));
             }
-         } else if (section == "gdb" && ctx._gdb_path.contains("gdb")) {
+         }else if (section == "gdb" && ctx._gdb_path.contains("gdb")) {
             if (key == "argument") {
                ctx._gdb_argv.emplace_back(mk_cstring(value));
             } else if (key == "arguments") {
                ctx.emplace_gdb_args_from_ini_file(value);
             } else if (key == "path") {
+				std::print(std::cerr, "path '{}={}'.\n", key, value);
                ctx._gdb_path = value;
             } else if (key == "log_all_output" && sv_atoi(value)) {
                if (auto it = ctx._interface_windows.find("Log"); it != ctx._interface_windows.end()) {
@@ -1482,7 +1484,7 @@ UIConfig GDBF_Config::load_settings(bool earlyPass) {
                parse_res.parse_int ("backtrace_count_limit", _backtrace_count_limit);
                // clang-format on
             }
-         } else if (section == "clangd") {
+			} else if (section == "clangd") {
             if (key == "path") {
                ctx._clangd_path = value;
             }
@@ -8197,10 +8199,65 @@ void Context::read_window_size(const fs::path& local_config_path) const {
 //             Change interpretation of command line so that arguments following this option are
 //             passed as arguments to the inferior.
 // ----------------------------------------------------------------------------------------------
+/*
 ExeStartInfo Context::emplace_gdb_args_from_command_line(int argc, char** argv) {
    ExeStartInfo esi;
 
    auto valid_executable = [](const char* arg) { return fs::is_regular_file(arg) && access(arg, X_OK) == 0; };
+
+   int c;
+   int option_index = 0;
+   std::string executable;
+   std::string core;
+   pid_t pid;
+   std::string command_file;
+   std::string args;
+
+   static struct option long_options[] = {
+      {"exec",    required_argument, 0, 'e'},
+      {"args",    required_argument, 0, 'a'},
+      {"command", required_argument, 0, 'x'},
+      {"pid",     required_argument, 0, 'p'},
+      {"core",    required_argument, 0, 'c'},
+	  //{"help",     no_argument,       0, 'h'},
+	  {0, 0, 0, 0}
+    };
+   while ((c = ::getopt_long(argc, argv, "e:a:x:p:c:", long_options, &option_index )) != -1) {
+      switch (c) {
+      case 'e': // --exec programm
+         executable = optarg;
+         if (valid_executable(optarg)) {
+			 esi._path = executable;
+         }
+         break;
+      case 'c':
+         core = optarg;
+         if (valid_executable(optarg)) {
+			 esi._path = executable;
+         }
+         break;
+      case 'a':
+         args = optarg;
+         if (valid_executable(optarg)) {
+			 esi._args = optarg;
+         }
+         break;
+      case 'x':
+         command_file = optarg;
+         if (valid_executable(optarg)) {
+			 // TODO
+         }
+         break;
+      case 'p':
+         pid = std::atoi(optarg);
+         if (kill(pid, 0) == 0) {
+			 // TODO;
+         }
+         break;
+      default:
+		  break;
+	  }
+
 
    // check whether last two arguments are either `prog procID` or `prog core`
    auto check_last_two = [&]() {
@@ -8223,6 +8280,7 @@ ExeStartInfo Context::emplace_gdb_args_from_command_line(int argc, char** argv) 
 
       return false;
    };
+
 
    assert(_gdb_argv.size() == 1); // _gdb_argv[0] set in Context::Context()
    for (int i = 1; i < argc; ++i)
@@ -8277,27 +8335,49 @@ ExeStartInfo Context::emplace_gdb_args_from_command_line(int argc, char** argv) 
    std::cout << esi << '\n';
    return esi;
 }
-
+*/
 unique_ptr<UI> Context::gdbf_main(int argc, char** argv) {
-   if (argc == 2) {
-      if ((0 == strcmp(argv[1], "-?") || 0 == strcmp(argv[1], "-h") || 0 == strcmp(argv[1], "--help"))) {
-         std::print(std::cerr,
-                    "Usage: {} [GDB args]\n\n"
-                    "GDB args: Pass any GDB arguments here, they will be forwarded to GDB.\n\n"
-                    "For more information, view the README at https://github.com/greg7mdp/gdbf/blob/main/README.md.\n",
-                    argv[0]);
-         return {};
-      }
 
-      if ((0 == strcmp(argv[1], "-v") || 0 == strcmp(argv[1], "--version"))) {
+	ctx._gdb_path = "gdb";
+	int c;
+   int option_index = 0;
+   static struct option long_options[] = {
+      {"version",  no_argument,       0, 'v'},
+      {"debugger", required_argument, 0, 'd'},
+      {"help",     no_argument,       0, 'h'},
+	  {"rr-replay", required_argument, 0, 'r'},
+	  {0, 0, 0, 0}
+    };
+   while ((c = ::getopt_long(argc, argv, "?hvd:r:", long_options, &option_index )) != -1) {
+      switch (c) {
+      case 'v':
 #ifdef GDBF_VERSION_STRING
          std::print(std::cout, "gdbf version {}\n", GDBF_VERSION_STRING);
 #else
          std::print(std::cout, "gdbf version {}", "unknown");
 #endif
          return {};
+
+      case 'd':
+         ctx._gdb_path = optarg;
+         break;
+      case 'r':
+         ctx._gdb_path = "rr";
+         ctx._gdb_argv.emplace_back(mk_cstring("rr"));
+		 ctx._gdb_argv.emplace_back(mk_cstring("replay"));
+         break;
+      case '?':
+      case 'h':
+      default :
+         std::print(std::cerr, "Usage: {} -h -v -d </usr/bin/gdb> -- [GDB args]\n"
+					"{} -r <file>\n\n"
+                    "GDB args: Pass any GDB arguments here, they will be forwarded to GDB.\n\n"
+                    "For more information, view the README at https://github.com/greg7mdp/gdbf/blob/main/README.md.\n",
+                    argv[0],argv[0]);
+         return {};
       }
    }
+
 
    // catch some signals
    // ------------------
@@ -8307,9 +8387,19 @@ unique_ptr<UI> Context::gdbf_main(int argc, char** argv) {
    });
    std::signal(SIGPIPE, [](int) { std::print(std::cerr, "SIGPIPE Received - ignored.\n"); });
 
+
    // process command arguments and create updated version to pass to gdb
    // -------------------------------------------------------------------
-   gdbfc._exe = emplace_gdb_args_from_command_line(argc, argv);
+   if (optind < argc) {
+	   // copy all args after '--' to gdb args
+	   for (int i = optind; i < argc; ++i) {
+		   ctx._gdb_argv.emplace_back(mk_cstring(argv[i]));
+	   }
+   }
+
+   //gdbfc._exe = emplace_gdb_args_from_command_line(argc - optind, &argv[optind]);
+
+
 
    // load settings and initialize ui
    // -------------------------------

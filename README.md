@@ -110,6 +110,13 @@ cmake --build build
 # Run gdbf
 ./build/gdbf
 
+# Run
+./gdbf -d aarch-gnu-linux-gdb -- ./myprog <coredump>
+./gdbf -d aarch-gnu-linux-gdb -- ./myprog pid
+./gdbf -d aarch-gnu-linux-gdb -- ./myprog -x gdbcmds
+
+
+
 # if your program `./myprog` crashed and generated a core file
 ./build/gdbf ./myprog <core_dump_file>
 
@@ -120,7 +127,7 @@ cmake --build build
 ./build/gdbf --args ./myprog arg1 arg2
 ```
 
-If you have run the same program before, no need to provide the arguments again, they will be loaded from the program `.ini` file in the `.gdbf` directory. 
+If you have run the same program before, no need to provide the arguments again, they will be loaded from the program `.ini` file in the `.gdbf` directory.
 
 Also, you can use the `up` and `down` arrow keys to scroll through previously used executables and their arguments.
 
