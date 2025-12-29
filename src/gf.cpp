@@ -34,6 +34,9 @@
 #include <thread>
 #include <unistd.h> // for execvp
 #include <getopt.h>
+#include <linux/prctl.h>  /* Definition of PR_* constants */
+#include <sys/prctl.h>
+
 
 namespace rng          = std::ranges;
 static const auto npos = std::string::npos;
@@ -548,8 +551,6 @@ void Context::debugger_thread_fn() {
    if (_gdb_argv.back() != nullptr)      // make sure arg list is null-terminated
       _gdb_argv.push_back(nullptr);
 
-#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
-   // std::print(std::cerr, "Using fork\n");
    _gdb_pid = fork();
 
    if (_gdb_pid == 0) {
@@ -557,7 +558,10 @@ void Context::debugger_thread_fn() {
       dup2(inputPipe[0], 0);                            // inputPipe[0]  == stdin
       dup2(outputPipe[1], 1);                           // outputPipe[1] == stdout
       dup2(outputPipe[1], 2);                           // outputPipe[1] == stderr
-      execvp(_gdb_path.c_str(), (char**)&_gdb_argv[0]); // execute gdb with arguments _gdb_argv
+
+	  prctl(PR_SET_PDEATHSIG, SIGTERM);
+
+	  execvp(_gdb_path.c_str(), (char**)&_gdb_argv[0]); // execute gdb with arguments _gdb_argv
       std::print(std::cerr, "Error: Couldn't execute gdb.\n");
       exit(EXIT_FAILURE);
 
@@ -565,28 +569,6 @@ void Context::debugger_thread_fn() {
       std::print(std::cerr, "Error: Couldn't fork.\n");
       exit(EXIT_FAILURE);
    }
-#else
-   // std::print(std::cerr, "Using spawn\n");
-   posix_spawn_file_actions_t actions = {};
-   posix_spawn_file_actions_init(&actions);
-   posix_spawn_file_actions_adddup2(&actions, inputPipe[0], 0);  // inputPipe[0]  == stdin
-   posix_spawn_file_actions_adddup2(&actions, outputPipe[1], 1); // outputPipe[1] == stdout
-   posix_spawn_file_actions_adddup2(&actions, outputPipe[1], 2); // outputPipe[1] == stderr
-
-   posix_spawnattr_t attrs = {};
-   posix_spawnattr_init(&attrs);
-   posix_spawnattr_setflags(&attrs, POSIX_SPAWN_SETSID);
-
-   int spawn_result = posix_spawnp(&_gdb_pid, _gdb_path.c_str(), &actions, &attrs, (char**)&_gdb_argv[0], environ);
-
-   posix_spawn_file_actions_destroy(&actions);
-   posix_spawnattr_destroy(&attrs);
-
-   if (spawn_result != 0) {
-      std::print(std::cerr, "Error: Couldn't execute gdb at path '{}': {}\n", _gdb_path, strerror(spawn_result));
-      exit(EXIT_FAILURE);
-   }
-#endif
 
    _pipe_to_gdb = inputPipe[1];
 
