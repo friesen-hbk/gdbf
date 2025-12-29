@@ -132,6 +132,36 @@ If you have run the same program before, no need to provide the arguments again,
 Also, you can use the `up` and `down` arrow keys to scroll through previously used executables and their arguments.
 
 
+### Emacs integration
+
+here is a small snippet for your emacs config:
+```lisp
+  (defun gdbf-project-debug ()
+	"Start gdbf debugging session for current project."
+	(interactive)
+	(let* ((pr (project-current t))
+		   (root (expand-file-name (project-root pr)))
+		   (default-directory root)
+		   (debugger (read-file-name "Debugger:" "/usr/bin/" "gdb"))
+		   (executable (expand-file-name (read-file-name "Executable to debug: " root))))
+	  (start-process "gdbf" "*gdbf*" "gdbf" "-d" debugger "-w" root "-x" server-name  "--" executable))
+	)
+  ;; add hot-keys to project-menu.
+  (keymap-set project-prefix-map "D" #'gdbf-project-debug)
+  (add-to-list 'project-switch-commands '(gdbf-project-debug "gdbf") t)
+```
+
+
+Also,  you can start emacs in background as deamon:
+```
+$ emacs --bg-daemon="gdbf"
+```
+and then start a session :
+```
+$ emacsclient -c --no-wait --socket-name="gdbf"
+```
+
+
 ### Essential Shortcuts
 
 | Action | Shortcut | Description |

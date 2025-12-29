@@ -390,7 +390,9 @@ struct GDBF_Config {
    // misc
    // ----
    std::unique_ptr<const char[]> _control_pipe_path;
+   std::string                   _emacs_server_name;
    std::string                   _vim_server_name;
+
    std::string                   _log_pipe_path;
    std::vector<Command>          _preset_commands;
    fs::path _global_config_path; // ~/.config/gdbf_config.ini or ~/.config/gf2_config.ini (main config file)
@@ -412,11 +414,21 @@ struct GDBF_Config {
    int      _backtrace_count_limit    = 50;
    bool     _grab_focus_on_breakpoint = true;
 
-   void init() {
+	void init(const std::string& working_dir, const std::string& emacs_server, const std::string& gvim_server) {
       assert(_current_directory.empty() && _local_config_dir.empty()); // make sure it is called only once
 
-      _current_directory = get_realpath(my_getcwd());
-
+	  if (working_dir.empty() or working_dir.starts_with(".")) {
+		  _current_directory = get_realpath(my_getcwd());
+		  std::cout << "working directory:" << _current_directory << std::endl;
+	  } else {
+		  if (working_dir.starts_with("~")) {
+                     _current_directory = getenv("HOME");
+					 _current_directory.append(working_dir.substr(1));
+		  } else {
+			  _current_directory = working_dir;
+		  }
+		  std::cout << "working directory:" << _current_directory << std::endl;
+	  }
       // ----------------------------
       // Figure out local config dir.
       // start from current dir
@@ -434,12 +446,17 @@ struct GDBF_Config {
       fs::create_directories(_local_config_dir); // create directory if it doesn't exist
 
       _global_config_path = std::format("{}/.config/gdbf_config.ini", getenv("HOME"));
-      if (!fs::exists(_global_config_path)) {
-         // if `gdbf_config.ini` not present, also accept `gf2_config.ini`
-         _global_config_path = std::format("{}/.config/gf2_config.ini", getenv("HOME"));
-      }
+	  std::cout << "global config:" << _global_config_path << std::endl;
 
-      _local_config_path = std::format("{}/gdbf_config.ini", _local_config_dir.native());
+	  _local_config_path = std::format("{}/gdbf_config.ini", _local_config_dir.native());
+	  std::cout << "local config:" << _local_config_path << std::endl;
+
+	  if (!emacs_server.empty()) {
+		  _emacs_server_name = emacs_server;
+	  }
+	  if (!gvim_server.empty()) {
+		  _vim_server_name = gvim_server;
+	  }
    }
 
 private:
@@ -614,6 +631,7 @@ struct Context {
    bool           set_disassembly_mode() { return _source_window->set_disassembly_mode(); }
    bool           inspect_line() { return _source_window->inspect_line(); }
    bool           sync_with_gvim();
+   bool           sync_with_emacs();
    bool           goto_definition();
    bool           go_back();
    bool           display_set_position(std::string_view file, std::optional<size_t> line);

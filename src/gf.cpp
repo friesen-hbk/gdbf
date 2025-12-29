@@ -1181,6 +1181,62 @@ bool Context::sync_with_gvim() {
    return true;
 }
 
+bool Context::sync_with_emacs() {
+   if (gdbfc._emacs_server_name.empty())
+      return false;
+
+   char buffer[1024];
+
+   std_format_to_n(
+      buffer, sizeof(buffer),
+      "emacsclient --no-wait --socket-name=\"{}\"   --eval '(let* ((win (or (selected-window) "
+      "(get-largest-window)))(buf (window-buffer win))(file (buffer-file-name buf))(line (with-current-buffer "
+      "buf(line-number-at-pos (point)))))(if file (format \"%s:%d\" file line)\"\"))'",
+      gdbfc._emacs_server_name);
+
+   // std::print("emacsclient --no-wait --socket-name=\"{}\" --eval '(let* ((win (or (selected-window)
+   // (get-largest-window)))(buf (window-buffer win))(file (buffer-file-name buf))(line (with-current-buffer
+   // buf(line-number-at-pos (point)))))(if file (format \"%s:%d\" file line)\"\"))'\n",gdbfc._emacs_server_name);
+
+   FILE* file = popen(buffer, "r");
+   if (!file)
+      return false;
+   buffer[fread(buffer, 1, 1023, file)] = 0;
+   pclose(file);
+
+   std::string_view output(buffer);
+
+   // delete quotes and newlines
+   while (!output.empty() && (output.back() == '\n' || output.back() == '"' || output.back() == ' '))
+      output.remove_suffix(1);
+   if (!output.empty() && output.front() == '"')
+      output.remove_prefix(1);
+
+   // we split , ":" is the token.
+   auto pos = output.find_last_of(':');
+   if (pos == std::string_view::npos)
+      return false;
+
+   std::string fileName(output.substr(0, pos));
+
+   // std::print("fileName:{}",fileName);
+
+   if (fileName == "nil")
+      return false;
+
+   std::string_view lineStr = output.substr(pos + 1);
+
+   size_t lineNumber = 0;
+   try {
+      lineNumber = std::stoul(std::string(lineStr));
+   } catch (...) {
+      return false;
+   }
+   // std::print("lineNumber:{}",lineNumber);
+   ctx.display_set_position(fileName, lineNumber); // lines in vi are 1-based
+   return true;
+}
+
 void Context::shell_or_send_to_gdb_internal(string_view command) {
    if (command.starts_with("shell ")) {
       // TODO Move this into send_to_gdb_internal?
@@ -1324,8 +1380,10 @@ UIConfig GDBF_Config::load_settings(bool earlyPass) {
    // load global config (from ~/.config/gdbf_config.ini or, if not present, ~/.config/gf2_config.ini)
    // ----------------------------------------------------------------------------------------------
    const auto config = LoadFile(_global_config_path.native());
-   if (!config)
+   if (!config) {
+      std::cout << "Can't load user default config. export default config.";
       return ui_config;
+   }
 
    INI_Parser config_view(*config);
 
@@ -1366,7 +1424,13 @@ UIConfig GDBF_Config::load_settings(bool earlyPass) {
             if (key == get_local_config_dir().native())
                current_folder_is_trusted = true;
          } else if (section == "vim" && key == "server_name") {
-            _vim_server_name = value;
+            if (!_vim_server_name.empty()) {
+				_vim_server_name = value;
+			 }
+         } else if (section == "emacs" && key == "server_name") {
+            if (!_emacs_server_name.empty()) {
+				_emacs_server_name = value;
+			}
          } else if (section == "pipe") {
             if (key == "log") {
                _log_pipe_path = value;
@@ -7756,10 +7820,17 @@ void Context::add_builtin_windows_and_commands() {
                                                        return true;
                                                     }}
    });
+
    _interface_commands.push_back({
-      ._label = "Sync with gvim\tF2",
-      ._shortcut{.code = UI_KEYCODE_FKEY(2), .invoke = [&]() { return ctx.sync_with_gvim(); }}
-   });
+      ._label = "Sync with editor\tF2",
+      ._shortcut{.code = UI_KEYCODE_FKEY(2), .invoke = [&]() {
+		  if(! gdbfc._vim_server_name.empty()) {
+			  return ctx.sync_with_emacs();
+		  }
+		  return ctx.sync_with_gvim();
+	  }}
+	  });
+
    _interface_commands.push_back({
       ._label = "Ask GDB for PWD\tCtrl+Shift+P",
       ._shortcut{.code = UI_KEYCODE_LETTER('P'), .ctrl = true, .shift = true, .invoke = gdb_invoker("gdbf-get-pwd")}
@@ -8320,17 +8391,25 @@ ExeStartInfo Context::emplace_gdb_args_from_command_line(int argc, char** argv) 
 */
 unique_ptr<UI> Context::gdbf_main(int argc, char** argv) {
 
-	ctx._gdb_path = "gdb";
-	int c;
+   ctx._gdb_path = "gdb";
+   int c;
    int option_index = 0;
+   std::string emacs_server;
+   std::string gvim_server;
+   std::string working_directory;
+
    static struct option long_options[] = {
-      {"version",  no_argument,       0, 'v'},
-      {"debugger", required_argument, 0, 'd'},
-      {"help",     no_argument,       0, 'h'},
-	  {"rr-replay", required_argument, 0, 'r'},
+      {"version",      no_argument,       0, 'v'},
+      {"debugger",     required_argument, 0, 'd'},
+      {"help",         no_argument,       0, 'h'},
+      {"rr-replay",    required_argument, 0, 'r'},
+      {"emacs-server", required_argument, 0, 'x'},
+      {"gvim-server", required_argument, 0, 'g'},
+
+	  {"work-directory", required_argument, 0, 'w'},
 	  {0, 0, 0, 0}
     };
-   while ((c = ::getopt_long(argc, argv, "?hvd:r:", long_options, &option_index )) != -1) {
+   while ((c = ::getopt_long(argc, argv, "?hvd:r:x:w:g:", long_options, &option_index )) != -1) {
       switch (c) {
       case 'v':
 #ifdef GDBF_VERSION_STRING
@@ -8343,6 +8422,17 @@ unique_ptr<UI> Context::gdbf_main(int argc, char** argv) {
       case 'd':
          ctx._gdb_path = optarg;
          break;
+      case 'x':
+         emacs_server = optarg;
+         break;
+      case 'g':
+         gvim_server = optarg;
+         break;
+
+      case 'w':
+         working_directory = optarg;
+         break;
+
       case 'r':
          ctx._gdb_path = "rr";
          ctx._gdb_argv.emplace_back(mk_cstring("rr"));
@@ -8385,7 +8475,8 @@ unique_ptr<UI> Context::gdbf_main(int argc, char** argv) {
 
    // load settings and initialize ui
    // -------------------------------
-   gdbfc.init();
+   gdbfc.init(working_directory, emacs_server, gvim_server);
+
 
    UIConfig ui_config = gdbfc.load_settings(true);
 
@@ -8440,7 +8531,12 @@ unique_ptr<UI> Context::gdbf_main(int argc, char** argv) {
    // start debugger thread after second `load_settings` which updates `_gdb_argv`
    // --------------------------------------------------------------------------------
    start_debugger_thread();
+
+   std::print("vim_server: {}\n", gdbfc._vim_server_name);
+   std::print("emacs_server: {}\n", gdbfc._emacs_server_name);
+
    sync_with_gvim();
+   sync_with_emacs();
 
    if (is_executable_in_path(_clangd_path)) {
       // Start clangd for code navigation
